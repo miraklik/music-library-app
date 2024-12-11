@@ -1,5 +1,32 @@
 basePath: /
 definitions:
+  models.Group:
+    properties:
+      created_at:
+        type: string
+      deleted_at:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      songs:
+        items:
+          $ref: '#/definitions/models.Song'
+        type: array
+      updated_at:
+        type: string
+    type: object
+  models.NewSongRequest:
+    properties:
+      group:
+        type: string
+      song:
+        type: string
+    required:
+    - group
+    - song
+    type: object
   models.Song:
     properties:
       created_at:
@@ -7,7 +34,9 @@ definitions:
       deleted_at:
         type: string
       group:
-        type: string
+        $ref: '#/definitions/models.Group'
+      group_id:
+        type: integer
       id:
         type: integer
       link:
@@ -116,6 +145,33 @@ paths:
           schema:
             type: string
       summary: Get all songs
+    post:
+      consumes:
+      - application/json
+      description: Create a new song
+      parameters:
+      - description: New song data
+        in: body
+        name: song
+        required: true
+        schema:
+          $ref: '#/definitions/models.NewSongRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.Song'
+        "400":
+          description: invalid input
+          schema:
+            type: string
+        "500":
+          description: internal server error
+          schema:
+            type: string
+      summary: Create a new song
   /songs/{id}:
     delete:
       description: Delete a song by its ID
@@ -142,6 +198,39 @@ paths:
           schema:
             type: string
       summary: Delete a song
+    patch:
+      consumes:
+      - application/json
+      description: Update one or multiple fields of an existing song
+      parameters:
+      - description: Song ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Updated fields
+        in: body
+        name: song
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Song'
+        "400":
+          description: invalid input
+          schema:
+            type: string
+        "404":
+          description: not found
+          schema:
+            type: string
+      summary: Partially update a song
     put:
       consumes:
       - application/json

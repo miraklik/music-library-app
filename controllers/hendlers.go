@@ -6,12 +6,12 @@ import (
 	"io"
 	"music-library/database"
 	"music-library/models"
-
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,10 +35,10 @@ type SongEnrichment struct {
 // @Failure 500 {string} string "internal server error"
 // @Router /info [get]
 func GetSongInfo(c *gin.Context) {
-	group := c.Query("group")
-	song := c.Query("song")
+	groupName := c.Query("group")
+	songName := c.Query("song")
 
-	if group == "" || song == "" {
+	if groupName == "" || songName == "" {
 		c.String(http.StatusBadRequest, "bad request: missing required parameters")
 		return
 	}
@@ -51,17 +51,32 @@ func GetSongInfo(c *gin.Context) {
 
 	db := dbInstance.GetDB()
 
+	// Найдём или создадим группу по имени
+	var dbGroup models.Group
+	if err := db.FirstOrCreate(&dbGroup, models.Group{Name: groupName}).Error; err != nil {
+		c.String(http.StatusInternalServerError, "internal server error")
+		return
+	}
+
 	var songRecord models.Song
-	if err := db.Where("\"group\" = ? AND song = ?", group, song).First(&songRecord).Error; err != nil {
-		songDetail, shouldReturn := GetSongDetailFromAPI(group, song, c)
+	if err := db.Where("group_id = ? AND song = ?", dbGroup.ID, songName).First(&songRecord).Error; err != nil {
+		// Песни нет в БД, попробуем получить из внешнего API
+		songDetail, shouldReturn := GetSongDetailFromAPI(groupName, songName, c)
 		if shouldReturn {
 			return
 		}
 
+		// Парсим дату в формат time.Time
+		parsedDate, err := time.Parse("2006-01-02", songDetail.ReleaseDate)
+		if err != nil {
+			c.String(http.StatusBadRequest, "invalid date format")
+			return
+		}
+
 		newSong := models.Song{
-			Group:       group,
-			Song:        song,
-			ReleaseDate: songDetail.ReleaseDate,
+			GroupID:     dbGroup.ID,
+			Song:        songName,
+			ReleaseDate: parsedDate,
 			Text:        songDetail.Text,
 			Link:        songDetail.Link,
 		}
@@ -73,23 +88,29 @@ func GetSongInfo(c *gin.Context) {
 		songRecord = newSong
 	}
 
+	// Подготовим SongDetail для ответа
 	songDetail := models.SongDetail{
-		ReleaseDate: songRecord.ReleaseDate,
+		ReleaseDate: songRecord.ReleaseDate.Format("2006-01-02"),
 		Text:        songRecord.Text,
 		Link:        songRecord.Link,
 	}
 
-	enrichSongFromJSON(&songDetail, group, song)
+	enrichSongFromJSON(&songDetail, groupName, songName)
 	c.JSON(http.StatusOK, songDetail)
 }
 
 func GetSongDetailFromAPI(group, song string, c *gin.Context) (models.SongDetail, bool) {
 	encodedGroup := url.QueryEscape(group)
 	encodedSong := url.QueryEscape(song)
-	apiURL := fmt.Sprintf("http://localhost:8081/info?group=%s&song=%s", encodedGroup, encodedSong)
+	externalAPIUrl := os.Getenv("EXTERNAL_API_URL")
+	if externalAPIUrl == "" {
+		c.String(http.StatusInternalServerError, "internal server error: EXTERNAL_API_URL not set")
+		return models.SongDetail{}, true
+	}
+	apiURL := fmt.Sprintf("%s/info?group=%s&song=%s", externalAPIUrl, encodedGroup, encodedSong)
 	response, err := http.Get(apiURL)
 	if err != nil {
-		c.String(http.StatusInternalServerError, "internal server error")
+		c.String(http.StatusInternalServerError, "internal server error: failed to call external API")
 		return models.SongDetail{}, true
 	}
 	defer response.Body.Close()
@@ -373,4 +394,86 @@ func DeleteSong(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]interface{}{"id #" + id: "deleted"})
+}
+
+// CreateSong создает новую песню
+// @Summary Create a new song
+// @Description Create a new song
+// @Accept json
+// @Produce json
+// @Param song body models.NewSongRequest true "New song data"
+// @Success 201 {object} models.Song
+// @Failure 400 {string} string "invalid input"
+// @Failure 500 {string} string "internal server error"
+// @Router /songs [post]
+func CreateSong(c *gin.Context) {
+	var req models.NewSongRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "invalid input")
+		return
+	}
+
+	db := database.NewDatabase()
+	if err := db.Connect(); err != nil {
+		c.String(http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	var group models.Group
+	if err := db.GetDB().FirstOrCreate(&group, models.Group{Name: req.Group}).Error; err != nil {
+		c.String(http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	newSong := models.Song{
+		GroupID: group.ID,
+		Song:    req.Song,
+	}
+
+	if err := db.GetDB().Create(&newSong).Error; err != nil {
+		c.String(http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	c.JSON(http.StatusCreated, newSong)
+}
+
+// PartialUpdateSong частично обновляет существующую песню
+// @Summary Partially update a song
+// @Description Update one or multiple fields of an existing song
+// @Accept json
+// @Produce json
+// @Param id path int true "Song ID"
+// @Param song body map[string]interface{} true "Updated fields"
+// @Success 200 {object} models.Song
+// @Failure 404 {string} string "not found"
+// @Failure 400 {string} string "invalid input"
+// @Router /songs/{id} [patch]
+func PartialUpdateSong(c *gin.Context) {
+	id := c.Param("id")
+	var updates map[string]interface{}
+
+	if err := c.ShouldBindJSON(&updates); err != nil {
+		c.String(http.StatusBadRequest, "invalid input")
+		return
+	}
+
+	db := database.NewDatabase()
+	if err := db.Connect(); err != nil {
+		c.String(http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	var song models.Song
+	if err := db.GetDB().First(&song, id).Error; err != nil {
+		c.String(http.StatusNotFound, "not found")
+		return
+	}
+
+	if err := db.GetDB().Model(&song).Updates(updates).Error; err != nil {
+		c.String(http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	c.JSON(http.StatusOK, song)
 }

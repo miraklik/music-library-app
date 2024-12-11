@@ -8,12 +8,14 @@ import (
 )
 
 type Config struct {
-	DBHost     string
-	DBPort     string
-	DBUser     string
-	DBPassword string
-	DBName     string
-	DBURL      string
+	DBHost           string
+	DBPort           string
+	DBUser           string
+	DBPassword       string
+	DBName           string
+	DBURL            string
+	EXTERNAL_API_URL string
+	LOG_LEVEL        string
 }
 
 func LoadEnv() *Config {
@@ -23,11 +25,13 @@ func LoadEnv() *Config {
 	}
 
 	return &Config{
-		DBHost:     os.Getenv("DB_HOST"),
-		DBPort:     os.Getenv("DB_PORT"),
-		DBUser:     os.Getenv("DB_USER"),
-		DBPassword: os.Getenv("DB_PASSWORD"),
-		DBName:     os.Getenv("DB_NAME"),
-		DBURL:      os.Getenv("DATABASE_URL"),
+		DBHost:           os.Getenv("DB_HOST"),
+		DBPort:           os.Getenv("DB_PORT"),
+		DBUser:           os.Getenv("DB_USER"),
+		DBPassword:       os.Getenv("DB_PASSWORD"),
+		DBName:           os.Getenv("DB_NAME"),
+		DBURL:            os.Getenv("DATABASE_URL"),
+		EXTERNAL_API_URL: os.Getenv("EXTERNAL_API_URL"),
+		LOG_LEVEL:        os.Getenv("LOG_LEVEL"),
 	}
 }
