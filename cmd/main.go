@@ -1,16 +1,31 @@
 package main
 
 import (
-	"log"
 	"music-library/config"
 	"music-library/controllers"
 	"music-library/database"
+	"music-library/repository"
+	"music-library/utils"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/sirupsen/logrus"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
+
+var log = logrus.New()
+
+func initLog() {
+	log.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp: true,
+	})
+
+	log.SetOutput(os.Stdout)
+
+	log.SetLevel(logrus.DebugLevel)
+}
 
 // @title Music Library API
 // @version 1.0
@@ -18,31 +33,43 @@ import (
 // @host localhost:5051
 // @BasePath /
 func main() {
-	_ = config.LoadEnv()
+	initLog()
+	cfg := config.LoadEnv()
 
 	dbInstance := database.NewDatabase()
 	err := dbInstance.Connect()
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		log.WithError(err).Fatal("Failde to connect to database")
 	}
 
-	log.Println("INFO: Database connected successfully.")
+	log.Info("Database connected successfully.")
 
 	db := dbInstance.GetDB()
 
 	database.Migrate(db)
-	log.Println("INFO: Database migrations completed.")
+	log.Info("Database migrations completed.")
+
+	songRep := repository.NewSongRepository(db)
 
 	r := gin.Default()
 
 	r.GET("/info", controllers.GetSongInfo)
-	r.GET("/songs", controllers.GetSongs)
+	r.GET("/songs", func(c *gin.Context) {
+		page := c.DefaultQuery("page", "1")
+		limit := c.DefaultQuery("limit", "10")
+		songs, err := songRep.GetAllSongs(utils.ToInt(page), utils.ToInt(limit))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, songs)
+	})
 	r.GET("/song/:id/verses", controllers.GetSongTextWithPagination)
 	r.PUT("/song/:id", controllers.UpdateSong)
 	r.DELETE("/song/:id", controllers.DeleteSong)
 
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
-	log.Println("INFO: Swagger documentation available at http://localhost:5050/swagger/index.html")
+	log.Info("Swagger documentation available at http://localhost:5050/swagger/index.html")
 
 	go func() {
 		testRouter := gin.Default()
@@ -68,11 +95,13 @@ func main() {
 			c.JSON(http.StatusOK, songDetail)
 		})
 
-		if err := testRouter.Run(":5051"); err != nil {
-			log.Fatalf("ERROR: Failed to start the test server: %v", err)
+		if err := testRouter.Run(cfg.TEST_SERVER_ADDRESS); err != nil {
+			log.WithError(err).Fatal("Failed to start the test server")
 		}
 	}()
 
-	log.Panicln("INFO: Starting the main server on port 5050")
-	log.Fatal(r.Run(":5050"))
+	log.Info("Starting the main server on port 5050")
+	if err := r.Run(cfg.SERVER_ADDRESS); err != nil {
+		log.WithError(err).Fatal("Failed to start the main server")
+	}
 }
